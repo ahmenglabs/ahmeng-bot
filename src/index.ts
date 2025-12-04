@@ -1,0 +1,161 @@
+import "dotenv/config.js";
+import TelegramBot from "node-telegram-bot-api";
+import cron from "node-cron";
+import { fetchCTFTimeEvents, type CTFTimeEvent } from "./ctftime.js";
+import { getScheduledEvents, isEventScheduled, markEventScheduled, markEventNotified, cleanupFinishedEvents } from "./db.js";
+
+if (!process.env.TELEGRAM_BOT_TOKEN) {
+  throw new Error("TELEGRAM_BOT_TOKEN is not defined in environment variables");
+}
+
+if (!process.env.TELEGRAM_CHAT_ID) {
+  throw new Error("TELEGRAM_CHAT_ID is not defined in environment variables");
+}
+
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const chatId = process.env.TELEGRAM_CHAT_ID;
+
+function escapeMarkdownV2(text: string): string {
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
+}
+
+function formatDate(date: Date): string {
+  const dayName = date.toLocaleString("en", { weekday: "long" });
+  const day = date.getDate().toString().padStart(2, "0");
+  const month = date.toLocaleString("en", { month: "long" });
+  const year = date.getFullYear();
+  const hours = date.getHours().toString().padStart(2, "0");
+  const minutes = date.getMinutes().toString().padStart(2, "0");
+  return `${dayName}, ${day} ${month} ${year} ${hours}:${minutes} WIB`;
+}
+
+function formatEventDetails(event: CTFTimeEvent, includeStarting: boolean = false): string {
+  const startDate = new Date(event.start);
+  const endDate = new Date(event.finish);
+
+  const totalMinutes = event.duration.days * 24 * 60 + event.duration.hours * 60;
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  const title = escapeMarkdownV2(event.title);
+  const url = escapeMarkdownV2(event.url);
+  const weightStr = escapeMarkdownV2(event.weight.toFixed(2));
+  const participantsStr = escapeMarkdownV2(event.participants.toString());
+
+  const titleLine = includeStarting ? `*${title} STARTING!*` : `*${title}*`;
+
+  return `${titleLine}
+
+Start: *${formatDate(startDate)}*
+End: *${formatDate(endDate)}*
+Duration: *${days}* days *${hours}* hours *${minutes}* minutes
+Weight: *${weightStr}*
+Participants: *${participantsStr}* teams
+
+URL: ${url}`;
+}
+
+function formatEventMessage(event: CTFTimeEvent): string {
+  return formatEventDetails(event, true);
+}
+
+function scheduleEventNotification(event: CTFTimeEvent): void {
+  if (isEventScheduled(event.id)) {
+    return;
+  }
+
+  const startTime = new Date(event.start);
+  const now = new Date();
+
+  if (startTime <= now) {
+    return;
+  }
+
+  const cronDate = new Date(startTime);
+  const cronExpression = `${cronDate.getMinutes()} ${cronDate.getHours()} ${cronDate.getDate()} ${cronDate.getMonth() + 1} *`;
+
+  cron.schedule(cronExpression, () => {
+    const message = formatEventMessage(event);
+    bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
+    markEventNotified(event.id);
+  });
+
+  markEventScheduled(event);
+}
+
+async function fetchAndScheduleEvents(): Promise<void> {
+  try {
+    cleanupFinishedEvents();
+
+    const events = await fetchCTFTimeEvents();
+    const filteredEvents = events.filter((event) => event.format === "Jeopardy" && event.onsite === false);
+
+    for (const event of filteredEvents) {
+      scheduleEventNotification(event);
+    }
+  } catch (error) {
+    console.error("Error fetching and scheduling events:", error);
+  }
+}
+
+function loadScheduledEventsOnStartup(): void {
+  const events = getScheduledEvents();
+  const now = new Date();
+
+  for (const event of events) {
+    const startTime = new Date(event.start);
+
+    if (startTime > now && !event.notified) {
+      scheduleEventNotification(event);
+    }
+  }
+}
+
+loadScheduledEventsOnStartup();
+fetchAndScheduleEvents();
+cron.schedule("0 * * * *", () => {
+  fetchAndScheduleEvents();
+});
+
+bot.onText(/!ctf/, async (msg) => {
+  const events = getScheduledEvents();
+  const now = new Date();
+  const upcomingEvents = events.filter((event) => {
+    const startTime = new Date(event.start);
+    return startTime > now && !event.notified;
+  });
+
+  if (upcomingEvents.length === 0) {
+    const sentMsg = await bot.sendMessage(msg.chat.id, "No upcoming CTF events", { parse_mode: "MarkdownV2" });
+
+    if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
+      setTimeout(() => {
+        bot.deleteMessage(msg.chat.id, sentMsg.message_id).catch(() => {});
+        if (msg.message_id) {
+          bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+        }
+      }, 60000);
+    }
+
+    return;
+  }
+
+  const messages = upcomingEvents.map((event) => formatEventDetails(event));
+
+  const fullMessage = `*UPCOMING CTF*\n\n${messages.join("\n\n\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n\n")}`;
+  const sentMsg = await bot.sendMessage(msg.chat.id, fullMessage, { parse_mode: "MarkdownV2" });
+
+  if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
+    setTimeout(() => {
+      bot.deleteMessage(msg.chat.id, sentMsg.message_id).catch(() => {});
+      if (msg.message_id) {
+        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
+      }
+    }, 60000);
+  }
+});
+
+bot.on("message", (msg) => {
+  console.log("Message received:", msg.text);
+});
