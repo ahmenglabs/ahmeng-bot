@@ -39,7 +39,7 @@ export async function fetchCTFTimeEvents(): Promise<CTFTimeEvent[]> {
   const now = Math.floor(Date.now() / 1000);
   const oneWeekLater = now + 7 * 24 * 60 * 60;
 
-  const url = `https://ctftime.org/api/v1/events/?start=${now}&finish=${oneWeekLater}`;
+  const url = `https://ctftime.org/api/v1/events/?limit=100&start=${now}&finish=${oneWeekLater}`;
 
   try {
     const response = await fetch(url);
