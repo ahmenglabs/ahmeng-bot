@@ -144,16 +144,7 @@ bot.onText(/!ctf/, async (msg) => {
   const messages = upcomingEvents.map((event) => formatEventDetails(event));
 
   const fullMessage = `*UPCOMING CTF*\n\n${messages.join("\n\n\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n\n")}`;
-  const sentMsg = await bot.sendMessage(msg.chat.id, fullMessage, { parse_mode: "MarkdownV2" });
-
-  if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-    setTimeout(() => {
-      bot.deleteMessage(msg.chat.id, sentMsg.message_id).catch(() => {});
-      if (msg.message_id) {
-        bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-      }
-    }, 60000);
-  }
+  await bot.sendMessage(msg.chat.id, fullMessage, { parse_mode: "MarkdownV2" });
 });
 
 bot.on("message", (msg) => {
