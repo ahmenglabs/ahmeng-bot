@@ -3,6 +3,12 @@ import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import { fetchCTFTimeEvents, type CTFTimeEvent } from "./ctftime.js";
 import { getScheduledEvents, isEventScheduled, markEventScheduled, markEventNotified, cleanupFinishedEvents } from "./db.js";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error("TELEGRAM_BOT_TOKEN is not defined in environment variables");
@@ -20,13 +26,7 @@ function escapeMarkdownV2(text: string): string {
 }
 
 function formatDate(date: Date): string {
-  const dayName = date.toLocaleString("en", { weekday: "long" });
-  const day = date.getDate().toString().padStart(2, "0");
-  const month = date.toLocaleString("en", { month: "long" });
-  const year = date.getFullYear();
-  const hours = date.getHours().toString().padStart(2, "0");
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  return `${dayName}, ${day} ${month} ${year} ${hours}:${minutes} WIB`;
+  return dayjs(date).tz("Asia/Jakarta").format("dddd, DD MMMM YYYY HH:mm") + " WIB";
 }
 
 function formatEventDetails(event: CTFTimeEvent, includeStarting: boolean = false): string {
