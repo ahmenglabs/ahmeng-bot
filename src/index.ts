@@ -127,17 +127,7 @@ bot.onText(/!ctf/, async (msg) => {
   });
 
   if (upcomingEvents.length === 0) {
-    const sentMsg = await bot.sendMessage(msg.chat.id, "No upcoming CTF events", { parse_mode: "MarkdownV2" });
-
-    if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
-      setTimeout(() => {
-        bot.deleteMessage(msg.chat.id, sentMsg.message_id).catch(() => {});
-        if (msg.message_id) {
-          bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {});
-        }
-      }, 60000);
-    }
-
+    await bot.sendMessage(msg.chat.id, "No upcoming CTF events", { parse_mode: "MarkdownV2" });
     return;
   }
 
