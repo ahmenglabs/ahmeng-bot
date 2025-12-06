@@ -3,6 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import { fetchCTFTimeEvents, type CTFTimeEvent } from "./ctftime.js";
 import { getScheduledEvents, isEventScheduled, markEventScheduled, markEventNotified, cleanupFinishedEvents } from "./db.js";
+import { startTracking, stopTracking } from "./ctfd.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -56,10 +57,6 @@ Participants: *${participantsStr}* teams
 URL: ${url}`;
 }
 
-function formatEventMessage(event: CTFTimeEvent): string {
-  return formatEventDetails(event, true);
-}
-
 function scheduleEventNotification(event: CTFTimeEvent, options: { force?: boolean } = {}): void {
   const { force = false } = options;
 
@@ -69,21 +66,23 @@ function scheduleEventNotification(event: CTFTimeEvent, options: { force?: boole
 
   const startTime = new Date(event.start);
   const now = new Date();
+  const timeUntilStart = startTime.getTime() - now.getTime();
 
-  if (startTime <= now) {
+  // If event already started, skip it
+  if (timeUntilStart <= 0) {
     return;
   }
 
-  const cronDate = new Date(startTime);
-  const cronExpression = `${cronDate.getMinutes()} ${cronDate.getHours()} ${cronDate.getDate()} ${cronDate.getMonth() + 1} *`;
-
-  cron.schedule(cronExpression, () => {
-    const message = formatEventMessage(event);
-    bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
+  // Use setTimeout for one-time notification
+  setTimeout(() => {
+    const message = formatEventDetails(event, true);
+    bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" })
+      .catch((error) => console.error("Error sending notification:", error));
     markEventNotified(event.id);
-  });
+  }, timeUntilStart);
 
   markEventScheduled(event);
+  console.log(`Scheduled notification for "${event.title}" at ${startTime.toISOString()}`);
 }
 
 async function fetchAndScheduleEvents(): Promise<void> {
@@ -120,7 +119,7 @@ cron.schedule("0 * * * *", () => {
   fetchAndScheduleEvents();
 });
 
-bot.onText(/!ctf/, async (msg) => {
+bot.onText(/!ctf$/, async (msg) => {
   const events = getScheduledEvents();
   const now = new Date();
   const upcomingEvents = events.filter((event) => {
@@ -137,6 +136,69 @@ bot.onText(/!ctf/, async (msg) => {
 
   const fullMessage = `*UPCOMING CTF*\n\n${messages.join("\n\n\\-\\-\\-\\-\\-\\-\\-\\-\\-\\-\n\n")}`;
   await bot.sendMessage(msg.chat.id, fullMessage, { parse_mode: "MarkdownV2" });
+});
+
+bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
+  if (!match || !match[1]) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Usage: `!ctfd <ctfd_url> <team_name> <access_token> <end_time>`\n\nExample:\n`!ctfd https://ctf.example.com \"Team Alpha\" abc123token \"2025-12-10 23:59\"`",
+      { parse_mode: "MarkdownV2" }
+    );
+    return;
+  }
+
+  const args = match[1].trim();
+  
+  const quotedMatch = args.match(/^(\S+)\s+"([^"]+)"\s+(\S+)\s+(.+)$/);
+  const simpleMatch = args.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+
+  let ctfdUrl: string;
+  let teamName: string;
+  let accessToken: string;
+  let endTimeStr: string;
+
+  if (quotedMatch) {
+    ctfdUrl = quotedMatch[1] || "";
+    teamName = quotedMatch[2] || "";
+    accessToken = quotedMatch[3] || "";
+    endTimeStr = quotedMatch[4] || "";
+  } else if (simpleMatch) {
+    ctfdUrl = simpleMatch[1] || "";
+    teamName = simpleMatch[2] || "";
+    accessToken = simpleMatch[3] || "";
+    endTimeStr = simpleMatch[4] || "";
+  } else {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Invalid format\\. Use: `!ctfd <ctfd_url> <team_name> <access_token> <end_time>`",
+      { parse_mode: "MarkdownV2" }
+    );
+    return;
+  }
+
+  // Parse end time
+  const endTime = dayjs.tz(endTimeStr.trim(), "YYYY-MM-DD HH:mm", "Asia/Jakarta").toDate();
+  
+  if (isNaN(endTime.getTime())) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Invalid end time format\\. Use format: `YYYY-MM-DD HH:mm` \\(WIB\\)\n\nExample: `2025-12-10 23:59`",
+      { parse_mode: "MarkdownV2" }
+    );
+    return;
+  }
+
+  await bot.sendMessage(msg.chat.id, "Starting CTFd tracking\\.\\.\\.", { parse_mode: "MarkdownV2" });
+
+  const result = await startTracking(msg.chat.id, ctfdUrl.trim(), teamName.trim(), accessToken.trim(), endTime, bot);
+  
+  await bot.sendMessage(msg.chat.id, escapeMarkdownV2(result), { parse_mode: "MarkdownV2" });
+});
+
+bot.onText(/!ctfd\s+stop/, async (msg) => {
+  stopTracking(msg.chat.id);
+  await bot.sendMessage(msg.chat.id, "CTFd tracking stopped\\.", { parse_mode: "MarkdownV2" });
 });
 
 bot.on("message", (msg) => {
