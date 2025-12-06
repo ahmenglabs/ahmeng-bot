@@ -142,7 +142,7 @@ bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
   if (!match || !match[1]) {
     await bot.sendMessage(
       msg.chat.id,
-      "Usage: `!ctfd <ctfd_url> <team_name> <access_token> <end_time>`\n\nExample:\n`!ctfd https://ctf.example.com \"Team Alpha\" abc123token \"2025-12-10 23:59\"`",
+      "Usage: `!ctfd url=<url> team_name=<name> access_token=<token> end_time=<time>`\n\nExample:\n`!ctfd url=https://ctf.example.com team_name=Team Alpha access_token=abc123 end_time=2025-12-10 23:59:00+7`",
       { parse_mode: "MarkdownV2" }
     );
     return;
@@ -150,40 +150,41 @@ bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
 
   const args = match[1].trim();
   
-  const quotedMatch = args.match(/^(\S+)\s+"([^"]+)"\s+(\S+)\s+(.+)$/);
-  const simpleMatch = args.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+  // Parse key=value format
+  const urlMatch = args.match(/url=(\S+)/);
+  const teamMatch = args.match(/team_name=(.+?)(?=\s+(?:access_token|end_time)=|$)/);
+  const tokenMatch = args.match(/access_token=(\S+)/);
+  const endTimeMatch = args.match(/end_time=(.+)$/);
 
-  let ctfdUrl: string;
-  let teamName: string;
-  let accessToken: string;
-  let endTimeStr: string;
-
-  if (quotedMatch) {
-    ctfdUrl = quotedMatch[1] || "";
-    teamName = quotedMatch[2] || "";
-    accessToken = quotedMatch[3] || "";
-    endTimeStr = quotedMatch[4] || "";
-  } else if (simpleMatch) {
-    ctfdUrl = simpleMatch[1] || "";
-    teamName = simpleMatch[2] || "";
-    accessToken = simpleMatch[3] || "";
-    endTimeStr = simpleMatch[4] || "";
-  } else {
+  if (!urlMatch || !teamMatch || !tokenMatch || !endTimeMatch) {
     await bot.sendMessage(
       msg.chat.id,
-      "Invalid format\\. Use: `!ctfd <ctfd_url> <team_name> <access_token> <end_time>`",
+      "Invalid format\\. Use: `!ctfd url=<url> team_name=<name> access_token=<token> end_time=<time>`",
       { parse_mode: "MarkdownV2" }
     );
     return;
   }
 
-  // Parse end time
-  const endTime = dayjs.tz(endTimeStr.trim(), "YYYY-MM-DD HH:mm", "Asia/Jakarta").toDate();
+  const ctfdUrl = urlMatch[1] || "";
+  const teamName = (teamMatch[1] || "").trim();
+  const accessToken = tokenMatch[1] || "";
+  const endTimeStr = (endTimeMatch[1] || "").trim();
+
+  // Parse end time - support both "YYYY-MM-DD HH:mm" and "YYYY-MM-DD HH:mm:ss+7" formats
+  let endTime: Date;
+  
+  // Try parsing with timezone offset first
+  if (endTimeStr.includes("+") || endTimeStr.includes("-")) {
+    endTime = dayjs(endTimeStr).toDate();
+  } else {
+    // Default to WIB timezone
+    endTime = dayjs.tz(endTimeStr, "YYYY-MM-DD HH:mm", "Asia/Jakarta").toDate();
+  }
   
   if (isNaN(endTime.getTime())) {
     await bot.sendMessage(
       msg.chat.id,
-      "Invalid end time format\\. Use format: `YYYY-MM-DD HH:mm` \\(WIB\\)\n\nExample: `2025-12-10 23:59`",
+      "Invalid end time format\\. Use format: `YYYY-MM-DD HH:mm:ss+7` or `YYYY-MM-DD HH:mm` \\(WIB\\)\n\nExample: `2025-12-10 23:59:00+7`",
       { parse_mode: "MarkdownV2" }
     );
     return;
@@ -191,7 +192,7 @@ bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
 
   await bot.sendMessage(msg.chat.id, "Starting CTFd tracking\\.\\.\\.", { parse_mode: "MarkdownV2" });
 
-  const result = await startTracking(msg.chat.id, ctfdUrl.trim(), teamName.trim(), accessToken.trim(), endTime, bot);
+  const result = await startTracking(msg.chat.id, ctfdUrl.trim(), teamName, accessToken.trim(), endTime, bot);
   
   await bot.sendMessage(msg.chat.id, escapeMarkdownV2(result), { parse_mode: "MarkdownV2" });
 });
