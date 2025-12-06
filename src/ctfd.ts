@@ -61,23 +61,68 @@ function escapeMarkdownV2(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
 }
 
-// Fetch team info by name
+// Fetch team info by name (with pagination support)
 async function findTeamByName(ctfdUrl: string, teamName: string, token: string): Promise<CTFdTeam | null> {
   try {
-    const url = `${ctfdUrl}/api/v1/scoreboard`;
-    const response = await fetch(url, {
+    // Try /teams endpoint first (supports pagination)
+    let page = 1;
+    while (true) {
+      const url = `${ctfdUrl}/api/v1/teams?page=${page}`;
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        console.log(`Teams page ${page} response not OK:`, response.status, response.statusText);
+        break;
+      }
+
+      const json = await response.json() as { success?: boolean; data?: CTFdTeam[]; meta?: { pagination?: { pages?: number } } };
+      console.log(`Teams API response (page ${page}):`, JSON.stringify(json, null, 2));
+      
+      if (json.success === false || !json.data) break;
+
+      // Search in current page
+      const team = json.data.find(
+        (t: CTFdTeam) => t.name.toLowerCase() === teamName.toLowerCase()
+      );
+
+      if (team) return team;
+
+      // Check if there are more pages
+      const totalPages = json.meta?.pagination?.pages ?? 1;
+      if (page >= totalPages) break;
+
+      page++;
+    }
+
+    // Fallback to scoreboard endpoint
+    console.log("Team not found in /teams, trying /scoreboard...");
+    const scoreboardUrl = `${ctfdUrl}/api/v1/scoreboard`;
+    const scoreboardResponse = await fetch(scoreboardUrl, {
       headers: {
         Authorization: `Token ${token}`,
         "Content-Type": "application/json",
       },
     });
 
-    if (!response.ok) return null;
+    if (!scoreboardResponse.ok) {
+      console.log("Scoreboard response not OK:", scoreboardResponse.status, scoreboardResponse.statusText);
+      return null;
+    }
 
-    const data = await response.json() as { success: boolean; data: CTFdScoreboard };
-    if (!data.success) return null;
+    const scoreboardJson = await scoreboardResponse.json() as { success?: boolean; data?: unknown; standings?: unknown };
+    console.log("Scoreboard API response:", JSON.stringify(scoreboardJson, null, 2));
+    if (scoreboardJson.success === false) return null;
 
-    const team = data.data.standings.find(
+    // Support varied shapes: { data: { standings: [] } } or { data: [] } or { standings: [] }
+    const standingsCandidate = (scoreboardJson as any)?.data?.standings ?? (scoreboardJson as any)?.data ?? (scoreboardJson as any)?.standings ?? [];
+    const standings: CTFdTeam[] = Array.isArray(standingsCandidate) ? standingsCandidate : [];
+
+    const team = standings.find(
       (t: CTFdTeam) => t.name.toLowerCase() === teamName.toLowerCase()
     );
 
@@ -99,9 +144,13 @@ async function fetchTeamSolves(ctfdUrl: string, teamId: number, token: string): 
       },
     });
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      console.log("Team solves response not OK:", response.status, response.statusText);
+      return [];
+    }
 
     const data = await response.json() as { success: boolean; data: CTFdSolve[] };
+    console.log(`Team ${teamId} solves API response:`, JSON.stringify(data, null, 2));
     if (!data.success) return [];
 
     return data.data;
@@ -122,9 +171,13 @@ async function fetchChallenges(ctfdUrl: string, token: string): Promise<number> 
       },
     });
 
-    if (!response.ok) return 0;
+    if (!response.ok) {
+      console.log("Challenges response not OK:", response.status, response.statusText);
+      return 0;
+    }
 
     const data = await response.json() as { success: boolean; data: CTFdChallenge[] };
+    console.log("Challenges API response:", JSON.stringify(data, null, 2));
     if (!data.success) return 0;
 
     return data.data.length;
@@ -137,6 +190,7 @@ async function fetchChallenges(ctfdUrl: string, token: string): Promise<number> 
 // Fetch current team rank and total teams
 async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Promise<{ rank: string; totalTeams: number }> {
   try {
+    // Try scoreboard first (usually has ranking info)
     const url = `${ctfdUrl}/api/v1/scoreboard`;
     const response = await fetch(url, {
       headers: {
@@ -145,18 +199,52 @@ async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Pr
       },
     });
 
-    if (!response.ok) return { rank: "?", totalTeams: 0 };
+    if (!response.ok) {
+      console.log("Team rank scoreboard response not OK:", response.status, response.statusText);
+      return { rank: "?", totalTeams: 0 };
+    }
 
-    const data = await response.json() as { success: boolean; data: CTFdScoreboard };
-    if (!data.success) return { rank: "?", totalTeams: 0 };
+    const json = await response.json() as { success?: boolean; data?: unknown; standings?: unknown };
+    console.log("Team rank API response:", JSON.stringify(json, null, 2));
+    if (json.success === false) return { rank: "?", totalTeams: 0 };
 
-    const standings = data.data.standings;
-    const teamIndex = standings.findIndex((t: CTFdTeam) => t.id === teamId);
+    const standingsCandidate = (json as any)?.data?.standings ?? (json as any)?.data ?? (json as any)?.standings ?? [];
+    const standings: CTFdTeam[] = Array.isArray(standingsCandidate) ? standingsCandidate : [];
 
-    return {
-      rank: teamIndex >= 0 ? String(teamIndex + 1) : "?",
-      totalTeams: standings.length,
-    };
+    if (standings.length > 0) {
+      const teamIndex = standings.findIndex((t: CTFdTeam) => t.id === teamId);
+      return {
+        rank: teamIndex >= 0 ? String(teamIndex + 1) : "?",
+        totalTeams: standings.length,
+      };
+    }
+
+    // Fallback: count total teams from /teams endpoint
+    console.log("Scoreboard empty, counting teams from /teams endpoint...");
+    let totalTeams = 0;
+    let page = 1;
+    while (true) {
+      const teamsUrl = `${ctfdUrl}/api/v1/teams?page=${page}`;
+      const teamsResponse = await fetch(teamsUrl, {
+        headers: {
+          Authorization: `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!teamsResponse.ok) break;
+
+      const teamsJson = await teamsResponse.json() as { success?: boolean; data?: CTFdTeam[]; meta?: { pagination?: { pages?: number; total?: number } } };
+      if (teamsJson.success === false || !teamsJson.data) break;
+
+      totalTeams = teamsJson.meta?.pagination?.total ?? totalTeams + teamsJson.data.length;
+      const totalPages = teamsJson.meta?.pagination?.pages ?? 1;
+      
+      if (page >= totalPages) break;
+      page++;
+    }
+
+    return { rank: "?", totalTeams };
   } catch (error) {
     console.error("Error fetching rank:", error);
     return { rank: "?", totalTeams: 0 };
