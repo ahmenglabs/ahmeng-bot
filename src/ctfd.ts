@@ -106,6 +106,11 @@ function escapeMarkdownV2(text: string): string {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
 }
 
+// Helper to clean rank string (remove ordinal suffixes)
+function cleanRank(rank: string): string {
+  return rank.replace(/(st|nd|rd|th)$/i, "");
+}
+
 // Fetch team info by name (with pagination support)
 async function findTeamByName(ctfdUrl: string, teamName: string, token: string): Promise<CTFdTeam | null> {
   try {
@@ -324,15 +329,19 @@ function formatSolveNotification(
   category: string,
   points: number,
   rank: string,
-  totalTeams: number
+  totalTeams: number,
+  solverName: string
 ): string {
+  const cleanRankStr = cleanRank(rank);
   return `*CHALLENGE SOLVED*
 
 Team name: *${escapeMarkdownV2(teamName)}*
 Chall name: *${escapeMarkdownV2(challengeName)}*
 Category: *${escapeMarkdownV2(category)}*
 Points: *${points}*
-Current rank: *${rank}/${totalTeams}*`;
+Current rank: *${cleanRankStr}/${totalTeams}*
+
+*SOLVED BY ${escapeMarkdownV2(solverName)}*`;
 }
 
 // Format summary message
@@ -344,12 +353,13 @@ function formatSummary(
   rank: string,
   totalTeams: number
 ): string {
+  const cleanRankStr = cleanRank(rank);
   return `*CTF SUMMARY*
 
 Team name: *${escapeMarkdownV2(teamName)}*
 Total solves: *${solveCount}/${totalChallenges}*
 Total points: *${totalPoints}*
-Current rank: *${rank}/${totalTeams}*`;
+Current rank: *${cleanRankStr}/${totalTeams}*`;
 }
 
 // Poll for new solves
@@ -377,7 +387,8 @@ async function pollSolves(chatId: number, bot: TelegramBot): Promise<void> {
         solve.challenge.category,
         solve.challenge.value,
         rank,
-        totalTeams
+        totalTeams,
+        solve.user.name
       );
 
       await bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
