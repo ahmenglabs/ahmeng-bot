@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import TelegramBot from "node-telegram-bot-api";
+import fs from "node:fs";
 
 // CTFd API Types
 interface CTFdChallenge {
@@ -73,7 +74,6 @@ const CTFD_DB_PATH = "./database/ctfd_sessions.json";
 // Load persisted sessions from file
 function loadPersistedSessions(): PersistedSession[] {
   try {
-    const fs = require("node:fs");
     const data = fs.readFileSync(CTFD_DB_PATH, "utf-8");
     return JSON.parse(data) as PersistedSession[];
   } catch {
@@ -83,7 +83,6 @@ function loadPersistedSessions(): PersistedSession[] {
 
 // Save active sessions to file
 function saveActiveSessions(): void {
-  const fs = require("node:fs");
   const sessions: PersistedSession[] = [];
   
   for (const [chatId, session] of activeSessions.entries()) {
