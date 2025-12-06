@@ -60,8 +60,10 @@ function formatEventMessage(event: CTFTimeEvent): string {
   return formatEventDetails(event, true);
 }
 
-function scheduleEventNotification(event: CTFTimeEvent): void {
-  if (isEventScheduled(event.id)) {
+function scheduleEventNotification(event: CTFTimeEvent, options: { force?: boolean } = {}): void {
+  const { force = false } = options;
+
+  if (!force && isEventScheduled(event.id)) {
     return;
   }
 
@@ -107,7 +109,7 @@ function loadScheduledEventsOnStartup(): void {
     const startTime = new Date(event.start);
 
     if (startTime > now && !event.notified) {
-      scheduleEventNotification(event);
+      scheduleEventNotification(event, { force: true });
     }
   }
 }

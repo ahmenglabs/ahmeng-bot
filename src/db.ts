@@ -38,7 +38,7 @@ export function markEventScheduled(event: CTFTimeEvent): void {
     const existing = events[existingIndex];
     events[existingIndex] = {
       ...event,
-      scheduled: existing.scheduled,
+      scheduled: true,
       notified: existing.notified,
     };
   } else {
