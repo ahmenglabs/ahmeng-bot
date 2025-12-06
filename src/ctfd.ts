@@ -330,7 +330,8 @@ function formatSolveNotification(
   points: number,
   rank: string,
   totalTeams: number,
-  solverName: string
+  solverName: string,
+  currentPoints: number
 ): string {
   const cleanRankStr = cleanRank(rank);
   return `*CHALLENGE SOLVED*
@@ -340,6 +341,7 @@ Chall name: *${escapeMarkdownV2(challengeName)}*
 Category: *${escapeMarkdownV2(category)}*
 Points: *${points}*
 Current rank: *${cleanRankStr}/${totalTeams}*
+Current points: *${currentPoints}*
 
 *SOLVED BY ${escapeMarkdownV2(solverName)}*`;
 }
@@ -380,6 +382,9 @@ async function pollSolves(chatId: number, bot: TelegramBot): Promise<void> {
         session.accessToken
       );
 
+      // Calculate current total points (including this new solve)
+      const currentPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
+
       // Send notification
       const message = formatSolveNotification(
         session.teamName,
@@ -388,7 +393,8 @@ async function pollSolves(chatId: number, bot: TelegramBot): Promise<void> {
         solve.challenge.value,
         rank,
         totalTeams,
-        solve.user.name
+        solve.user.name,
+        currentPoints
       );
 
       await bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
