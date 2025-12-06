@@ -53,8 +53,54 @@ interface TrackingSession {
   totalChallenges: number;
 }
 
+// Persistable session data (for saving to file)
+interface PersistedSession {
+  chatId: number;
+  ctfdUrl: string;
+  teamName: string;
+  accessToken: string;
+  teamId: number | null;
+  knownSolves: number[];
+  endTime: string;
+  totalChallenges: number;
+}
+
 // In-memory tracker for active sessions (one per chat)
 const activeSessions = new Map<number, TrackingSession>();
+
+const CTFD_DB_PATH = "./database/ctfd_sessions.json";
+
+// Load persisted sessions from file
+function loadPersistedSessions(): PersistedSession[] {
+  try {
+    const fs = require("node:fs");
+    const data = fs.readFileSync(CTFD_DB_PATH, "utf-8");
+    return JSON.parse(data) as PersistedSession[];
+  } catch {
+    return [];
+  }
+}
+
+// Save active sessions to file
+function saveActiveSessions(): void {
+  const fs = require("node:fs");
+  const sessions: PersistedSession[] = [];
+  
+  for (const [chatId, session] of activeSessions.entries()) {
+    sessions.push({
+      chatId,
+      ctfdUrl: session.ctfdUrl,
+      teamName: session.teamName,
+      accessToken: session.accessToken,
+      teamId: session.teamId,
+      knownSolves: Array.from(session.knownSolves),
+      endTime: session.endTime.toISOString(),
+      totalChallenges: session.totalChallenges,
+    });
+  }
+  
+  fs.writeFileSync(CTFD_DB_PATH, JSON.stringify(sessions, null, 2));
+}
 
 // Helper to escape MarkdownV2
 function escapeMarkdownV2(text: string): string {
@@ -212,39 +258,60 @@ async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Pr
     const standings: CTFdTeam[] = Array.isArray(standingsCandidate) ? standingsCandidate : [];
 
     if (standings.length > 0) {
-      const teamIndex = standings.findIndex((t: CTFdTeam) => t.id === teamId);
-      return {
-        rank: teamIndex >= 0 ? String(teamIndex + 1) : "?",
-        totalTeams: standings.length,
-      };
+      // Find the team and use its place field or index
+      const team = standings.find((t: CTFdTeam) => t.id === teamId);
+      if (team) {
+        // Use place field if available, otherwise use index
+        const rank = team.place || String(standings.findIndex((t: CTFdTeam) => t.id === teamId) + 1);
+        return {
+          rank: rank,
+          totalTeams: standings.length,
+        };
+      }
     }
 
-    // Fallback: count total teams from /teams endpoint
-    console.log("Scoreboard empty, counting teams from /teams endpoint...");
-    let totalTeams = 0;
-    let page = 1;
-    while (true) {
-      const teamsUrl = `${ctfdUrl}/api/v1/teams?page=${page}`;
-      const teamsResponse = await fetch(teamsUrl, {
-        headers: {
-          Authorization: `Token ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
+    // Fallback: get team info from /teams/{id} endpoint
+    console.log("Team not in scoreboard, fetching from /teams endpoint...");
+    const teamUrl = `${ctfdUrl}/api/v1/teams/${teamId}`;
+    const teamResponse = await fetch(teamUrl, {
+      headers: {
+        Authorization: `Token ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
 
-      if (!teamsResponse.ok) break;
+    if (teamResponse.ok) {
+      const teamJson = await teamResponse.json() as { success?: boolean; data?: CTFdTeam };
+      if (teamJson.success !== false && teamJson.data?.place) {
+        // Count total teams
+        let totalTeams = 0;
+        let page = 1;
+        while (true) {
+          const teamsUrl = `${ctfdUrl}/api/v1/teams?page=${page}`;
+          const teamsResponse = await fetch(teamsUrl, {
+            headers: {
+              Authorization: `Token ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
 
-      const teamsJson = await teamsResponse.json() as { success?: boolean; data?: CTFdTeam[]; meta?: { pagination?: { pages?: number; total?: number } } };
-      if (teamsJson.success === false || !teamsJson.data) break;
+          if (!teamsResponse.ok) break;
 
-      totalTeams = teamsJson.meta?.pagination?.total ?? totalTeams + teamsJson.data.length;
-      const totalPages = teamsJson.meta?.pagination?.pages ?? 1;
-      
-      if (page >= totalPages) break;
-      page++;
+          const teamsJson = await teamsResponse.json() as { success?: boolean; data?: CTFdTeam[]; meta?: { pagination?: { pages?: number; total?: number } } };
+          if (teamsJson.success === false || !teamsJson.data) break;
+
+          totalTeams = teamsJson.meta?.pagination?.total ?? totalTeams + teamsJson.data.length;
+          const totalPages = teamsJson.meta?.pagination?.pages ?? 1;
+          
+          if (page >= totalPages) break;
+          page++;
+        }
+
+        return { rank: teamJson.data.place, totalTeams };
+      }
     }
 
-    return { rank: "?", totalTeams };
+    return { rank: "?", totalTeams: 0 };
   } catch (error) {
     console.error("Error fetching rank:", error);
     return { rank: "?", totalTeams: 0 };
@@ -358,6 +425,7 @@ export function stopTracking(chatId: number): void {
   }
 
   activeSessions.delete(chatId);
+  saveActiveSessions();
 }
 
 // Start tracking a team
@@ -406,6 +474,7 @@ export async function startTracking(
   };
 
   activeSessions.set(chatId, session);
+  saveActiveSessions();
 
   // Start polling every 30 seconds
   session.pollInterval = setInterval(() => {
@@ -425,4 +494,53 @@ export async function startTracking(
   }
 
   return `Started tracking team "${teamName}". Will send summary 2 minutes before CTF ends.`;
+}
+
+// Restore sessions from file on startup
+export async function restoreCtfdSessions(bot: TelegramBot): Promise<void> {
+  const sessions = loadPersistedSessions();
+  const now = new Date();
+
+  for (const persisted of sessions) {
+    const endTime = new Date(persisted.endTime);
+    
+    // Skip if already ended
+    if (endTime <= now) {
+      console.log(`Skipping expired CTFd session for chat ${persisted.chatId}`);
+      continue;
+    }
+
+    console.log(`Restoring CTFd session for chat ${persisted.chatId}, team "${persisted.teamName}"`);
+    
+    const session: TrackingSession = {
+      chatId: persisted.chatId,
+      ctfdUrl: persisted.ctfdUrl,
+      teamName: persisted.teamName,
+      accessToken: persisted.accessToken,
+      teamId: persisted.teamId,
+      knownSolves: new Set(persisted.knownSolves),
+      pollInterval: null,
+      summaryTimeout: null,
+      endTime,
+      totalChallenges: persisted.totalChallenges,
+    };
+
+    activeSessions.set(persisted.chatId, session);
+
+    // Restart polling
+    session.pollInterval = setInterval(() => {
+      pollSolves(persisted.chatId, bot);
+    }, 30000);
+
+    // Reschedule summary
+    const timeUntilSummary = endTime.getTime() - now.getTime() - 2 * 60 * 1000;
+    if (timeUntilSummary > 0) {
+      session.summaryTimeout = setTimeout(() => {
+        sendSummary(persisted.chatId, bot);
+      }, timeUntilSummary);
+    } else {
+      // Send summary immediately if less than 2 minutes left
+      await sendSummary(persisted.chatId, bot);
+    }
+  }
 }
