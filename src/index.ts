@@ -3,7 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import { fetchCTFTimeEvents, type CTFTimeEvent } from "./ctftime.js";
 import { getScheduledEvents, isEventScheduled, markEventScheduled, markEventNotified, cleanupFinishedEvents } from "./db.js";
-import { startTracking, stopTracking, restoreCtfdSessions } from "./ctfd.js";
+import { startTracking, stopTracking, restoreCtfdSessions, findEasyChallenges } from "./ctfd.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -201,6 +201,43 @@ bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
 bot.onText(/!ctfd\s+stop/, async (msg) => {
   stopTracking(msg.chat.id);
   await bot.sendMessage(msg.chat.id, "CTFd tracking stopped\\.", { parse_mode: "MarkdownV2" });
+});
+
+bot.onText(/!findeasychall\s+(.+)/, async (msg, match) => {
+  if (!match || !match[1]) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Usage: `!findeasychall url=<url> team_name=<name> access_token=<token>`\n\nExample:\n`!findeasychall url=https://ctf.example.com team_name=Team Alpha access_token=abc123`",
+      { parse_mode: "MarkdownV2" }
+    );
+    return;
+  }
+
+  const args = match[1].trim();
+  
+  // Parse key=value format
+  const urlMatch = args.match(/url=(\S+)/);
+  const teamMatch = args.match(/team_name=(.+?)(?=\s+access_token=|$)/);
+  const tokenMatch = args.match(/access_token=(\S+)/);
+
+  if (!urlMatch || !teamMatch || !tokenMatch) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Invalid format\\. Use: `!findeasychall url=<url> team_name=<name> access_token=<token>`",
+      { parse_mode: "MarkdownV2" }
+    );
+    return;
+  }
+
+  const ctfdUrl = urlMatch[1] || "";
+  const teamName = (teamMatch[1] || "").trim();
+  const accessToken = tokenMatch[1] || "";
+
+  await bot.sendMessage(msg.chat.id, "Finding easy challenges\\.\\.\\.", { parse_mode: "MarkdownV2" });
+
+  const result = await findEasyChallenges(ctfdUrl.trim(), teamName, accessToken.trim());
+  
+  await bot.sendMessage(msg.chat.id, result, { parse_mode: "MarkdownV2" });
 });
 
 bot.on("message", (msg) => {

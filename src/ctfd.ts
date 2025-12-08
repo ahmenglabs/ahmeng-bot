@@ -8,6 +8,7 @@ interface CTFdChallenge {
   name: string;
   category: string;
   value: number;
+  solves?: number;
 }
 
 interface CTFdSolve {
@@ -590,5 +591,87 @@ export async function restoreCtfdSessions(bot: TelegramBot): Promise<void> {
       // Send summary immediately if less than 2 minutes left
       await sendSummary(persisted.chatId, bot);
     }
+  }
+}
+
+// Find easy challenges (unsolved by team, sorted by total solves)
+export async function findEasyChallenges(
+  ctfdUrl: string,
+  teamName: string,
+  accessToken: string
+): Promise<string> {
+  try {
+    // Find team by name
+    const team = await findTeamByName(ctfdUrl, teamName, accessToken);
+    if (!team) {
+      return `Error: Team "${teamName}" not found`;
+    }
+
+    // Fetch team solves
+    const teamSolves = await fetchTeamSolves(ctfdUrl, team.id, accessToken);
+    const solvedChallengeIds = new Set(teamSolves.map((s) => s.challenge_id));
+
+    // Fetch all challenges
+    const challengesUrl = `${ctfdUrl}/api/v1/challenges`;
+    const response = await fetch(challengesUrl, {
+      headers: {
+        Authorization: `Token ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return `Error: Failed to fetch challenges (${response.status})`;
+    }
+
+    const data = await response.json() as { success: boolean; data: CTFdChallenge[] };
+    if (!data.success || !data.data) {
+      return "Error: Invalid challenges response";
+    }
+
+    // Filter unsolved challenges
+    const unsolvedChallenges = data.data.filter((c) => !solvedChallengeIds.has(c.id));
+
+    if (unsolvedChallenges.length === 0) {
+      return "🎉 All challenges solved! Great work!";
+    }
+
+    // Fetch solve count for each unsolved challenge
+    const challengesWithSolves: Array<CTFdChallenge & { solves: number }> = [];
+    for (const challenge of unsolvedChallenges) {
+      const solvesUrl = `${ctfdUrl}/api/v1/challenges/${challenge.id}/solves`;
+      const solvesResponse = await fetch(solvesUrl, {
+        headers: {
+          Authorization: `Token ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (solvesResponse.ok) {
+        const solvesData = await solvesResponse.json() as { success: boolean; data: unknown[] };
+        const solveCount = solvesData.success && Array.isArray(solvesData.data) ? solvesData.data.length : 0;
+        challengesWithSolves.push({ ...challenge, solves: solveCount });
+      } else {
+        challengesWithSolves.push({ ...challenge, solves: 0 });
+      }
+    }
+
+    // Sort by solves descending (most solved first = easiest)
+    challengesWithSolves.sort((a, b) => b.solves - a.solves);
+
+    // Format message
+    const challengeLines = challengesWithSolves.map((c) => 
+      `Chall name: *${escapeMarkdownV2(c.name)}*
+Category: *${escapeMarkdownV2(c.category)}*
+Current points: *${c.value}*
+Total solves: *${c.solves}* teams`
+    ).join("\n\n");
+
+    return `*LIST \\(MAYBE\\) EASY CHALL*
+
+${challengeLines}`;
+  } catch (error) {
+    console.error("Error finding easy challenges:", error);
+    return "Error: Failed to find easy challenges";
   }
 }
