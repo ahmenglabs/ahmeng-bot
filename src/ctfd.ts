@@ -49,6 +49,7 @@ interface TrackingSession {
   accessToken: string;
   teamId: number | null;
   knownSolves: Set<number>;
+  notifiedSolves: Set<number>;
   pollInterval: NodeJS.Timeout | null;
   summaryTimeout: NodeJS.Timeout | null;
   endTime: Date;
@@ -63,6 +64,7 @@ interface PersistedSession {
   accessToken: string;
   teamId: number | null;
   knownSolves: number[];
+  notifiedSolves: number[];
   endTime: string;
   totalChallenges: number;
 }
@@ -94,6 +96,7 @@ function saveActiveSessions(): void {
       accessToken: session.accessToken,
       teamId: session.teamId,
       knownSolves: Array.from(session.knownSolves),
+      notifiedSolves: Array.from(session.notifiedSolves),
       endTime: session.endTime.toISOString(),
       totalChallenges: session.totalChallenges,
     });
@@ -353,6 +356,7 @@ async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Pr
 
 // Format solve notification
 function formatSolveNotification(
+  eventName: string,
   teamName: string,
   challengeName: string,
   category: string,
@@ -365,6 +369,7 @@ function formatSolveNotification(
   const cleanRankStr = cleanRank(rank);
   return `*CHALLENGE SOLVED*
 
+Event name: *${escapeMarkdownV2(eventName)}*
 Team name: *${escapeMarkdownV2(teamName)}*
 Chall name: *${escapeMarkdownV2(challengeName)}*
 Category: *${escapeMarkdownV2(category)}*
@@ -406,29 +411,38 @@ async function pollSolves(chatId: number, bot: TelegramBot): Promise<void> {
     if (!session.knownSolves.has(solve.challenge_id)) {
       session.knownSolves.add(solve.challenge_id);
 
-      // Fetch current rank
-      const { rank, totalTeams } = await fetchTeamRank(
-        session.ctfdUrl,
-        session.teamId,
-        session.accessToken
-      );
+      // Only send notification if not already notified
+      if (!session.notifiedSolves.has(solve.challenge_id)) {
+        // Fetch current rank and event name
+        const { rank, totalTeams } = await fetchTeamRank(
+          session.ctfdUrl,
+          session.teamId,
+          session.accessToken
+        );
+        const eventName = await fetchEventName(session.ctfdUrl, session.accessToken);
 
-      // Calculate current total points (including this new solve)
-      const currentPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
+        // Calculate current total points (including this new solve)
+        const currentPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
 
-      // Send notification
-      const message = formatSolveNotification(
-        session.teamName,
-        solve.challenge.name,
-        solve.challenge.category,
-        solve.challenge.value,
-        rank,
-        totalTeams,
-        solve.user.name,
-        currentPoints
-      );
+        // Send notification
+        const message = formatSolveNotification(
+          eventName,
+          session.teamName,
+          solve.challenge.name,
+          solve.challenge.category,
+          solve.challenge.value,
+          rank,
+          totalTeams,
+          solve.user.name,
+          currentPoints
+        );
 
-      await bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
+        await bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" });
+        
+        // Mark as notified and save to file
+        session.notifiedSolves.add(solve.challenge_id);
+        saveActiveSessions();
+      }
     }
   }
 }
@@ -516,6 +530,7 @@ export async function startTracking(
     accessToken,
     teamId: team.id,
     knownSolves,
+    notifiedSolves: new Set(),
     pollInterval: null,
     summaryTimeout: null,
     endTime,
@@ -568,6 +583,7 @@ export async function restoreCtfdSessions(bot: TelegramBot): Promise<void> {
       accessToken: persisted.accessToken,
       teamId: persisted.teamId,
       knownSolves: new Set(persisted.knownSolves),
+      notifiedSolves: new Set(persisted.notifiedSolves || []),
       pollInterval: null,
       summaryTimeout: null,
       endTime,
