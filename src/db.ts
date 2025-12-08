@@ -70,9 +70,12 @@ export function markEventNotified(eventId: number): void {
 export function cleanupFinishedEvents(): void {
   const events = loadEvents();
   const now = new Date();
+  // Keep events that haven't finished yet OR are still active (for URL matching)
+  // Remove only events that finished more than 7 days ago
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const activeEvents = events.filter((event) => {
     const endTime = new Date(event.finish);
-    return endTime > now;
+    return endTime > sevenDaysAgo;
   });
   saveEvents(activeEvents);
 }

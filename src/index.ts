@@ -70,6 +70,15 @@ function scheduleEventNotification(event: CTFTimeEvent, options: { force?: boole
 
   // If event already started, skip it
   if (timeUntilStart <= 0) {
+    console.log(`Event "${event.title}" already started, skipping notification`);
+    return;
+  }
+
+  // setTimeout max is ~24.8 days, so only schedule if within this limit
+  const MAX_TIMEOUT = 2147483647; // Max 32-bit signed integer
+  if (timeUntilStart > MAX_TIMEOUT) {
+    console.log(`Event "${event.title}" is too far in the future (${Math.floor(timeUntilStart / (1000 * 60 * 60 * 24))} days), will schedule later`);
+    markEventScheduled(event);
     return;
   }
 
@@ -77,12 +86,15 @@ function scheduleEventNotification(event: CTFTimeEvent, options: { force?: boole
   setTimeout(() => {
     const message = formatEventDetails(event, true);
     bot.sendMessage(chatId, message, { parse_mode: "MarkdownV2" })
+      .then(() => {
+        console.log(`Notification sent for "${event.title}"`);
+        markEventNotified(event.id);
+      })
       .catch((error) => console.error("Error sending notification:", error));
-    markEventNotified(event.id);
   }, timeUntilStart);
 
   markEventScheduled(event);
-  console.log(`Scheduled notification for "${event.title}" at ${startTime.toISOString()}`);
+  console.log(`Scheduled notification for "${event.title}" at ${startTime.toISOString()} (in ${Math.floor(timeUntilStart / 1000 / 60)} minutes)`);
 }
 
 async function fetchAndScheduleEvents(): Promise<void> {
