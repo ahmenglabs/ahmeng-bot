@@ -237,7 +237,35 @@ async function fetchChallenges(ctfdUrl: string, token: string): Promise<number> 
   }
 }
 
-// Fetch current team rank and total teams
+// Fetch event name from CTFd config
+async function fetchEventName(ctfdUrl: string, token: string): Promise<string> {
+  try {
+    const url = `${ctfdUrl}/api/v1/config`;
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Token ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.log("Config response not OK:", response.status, response.statusText);
+      return "Unknown Event";
+    }
+
+    const data = await response.json() as { success: boolean; data: any[] };
+    console.log("Config API response:", JSON.stringify(data, null, 2));
+    
+    if (!data.success || !data.data) return "Unknown Event";
+
+    // Look for ctf_name or similar config
+    const ctfNameConfig = data.data.find((config: any) => config.key === "ctf_name" || config.key === "name");
+    return ctfNameConfig?.value || "Unknown Event";
+  } catch (error) {
+    console.error("Error fetching event name:", error);
+    return "Unknown Event";
+  }
+}
 async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Promise<{ rank: string; totalTeams: number }> {
   try {
     // Try scoreboard first (usually has ranking info)
@@ -348,6 +376,7 @@ Current points: *${currentPoints}*
 
 // Format summary message
 function formatSummary(
+  eventName: string,
   teamName: string,
   solveCount: number,
   totalChallenges: number,
@@ -358,6 +387,7 @@ function formatSummary(
   const cleanRankStr = cleanRank(rank);
   return `*CTF SUMMARY*
 
+Event name: *${escapeMarkdownV2(eventName)}*
 Team name: *${escapeMarkdownV2(teamName)}*
 Total solves: *${solveCount}/${totalChallenges}*
 Total points: *${totalPoints}*
@@ -409,10 +439,12 @@ async function sendSummary(chatId: number, bot: TelegramBot): Promise<void> {
 
   const solves = await fetchTeamSolves(session.ctfdUrl, session.teamId, session.accessToken);
   const { rank, totalTeams } = await fetchTeamRank(session.ctfdUrl, session.teamId, session.accessToken);
+  const eventName = await fetchEventName(session.ctfdUrl, session.accessToken);
 
   const totalPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
 
   const message = formatSummary(
+    eventName,
     session.teamName,
     solves.length,
     session.totalChallenges,
