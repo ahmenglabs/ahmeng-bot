@@ -25,6 +25,12 @@ export function getScheduledEvents(): ScheduledEvent[] {
   return loadEvents();
 }
 
+export function findEventByUrl(url: string): ScheduledEvent | null {
+  const events = loadEvents();
+  const normalizedUrl = url.toLowerCase().replace(/\/+$/, "");
+  return events.find((e) => e.url.toLowerCase().replace(/\/+$/, "") === normalizedUrl) || null;
+}
+
 export function isEventScheduled(eventId: number): boolean {
   const events = loadEvents();
   return events.some((e) => e.id === eventId && e.scheduled);

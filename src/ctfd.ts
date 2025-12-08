@@ -72,6 +72,9 @@ interface PersistedSession {
 // In-memory tracker for active sessions (one per chat)
 const activeSessions = new Map<number, TrackingSession>();
 
+// In-memory event name cache (keyed by CTFd URL)
+const eventNameCache = new Map<string, string>();
+
 const CTFD_DB_PATH = "./database/ctfd_sessions.json";
 
 // Load persisted sessions from file
@@ -241,34 +244,30 @@ async function fetchChallenges(ctfdUrl: string, token: string): Promise<number> 
   }
 }
 
-// Fetch event name from CTFd config
-async function fetchEventName(ctfdUrl: string, token: string): Promise<string> {
-  try {
-    const url = `${ctfdUrl}/api/v1/config`;
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
+// Get event name from cache (set via setEventName)
+function getEventName(ctfdUrl: string): string {
+  const normalizedUrl = ctfdUrl.toLowerCase().replace(/\/+$/, "");
+  return eventNameCache.get(normalizedUrl) || "Unknown Event";
+}
 
-    if (!response.ok) {
-      console.log("Config response not OK:", response.status, response.statusText);
-      return "Unknown Event";
+// Set event name by matching CTFd URL with events.json
+export function setEventName(ctfdUrl: string): void {
+  const normalizedUrl = ctfdUrl.toLowerCase().replace(/\/+$/, "");
+  
+  // Import db module to access events
+  import("./db.js").then((db) => {
+    const event = db.findEventByUrl(ctfdUrl);
+    if (event) {
+      eventNameCache.set(normalizedUrl, event.title);
+      console.log(`Event name set for ${ctfdUrl}: ${event.title}`);
+    } else {
+      eventNameCache.set(normalizedUrl, "Unknown Event");
+      console.log(`No matching event found for ${ctfdUrl} in events.json`);
     }
-
-    const data = await response.json() as { success: boolean; data: any[] };
-    console.log("Config API response:", JSON.stringify(data, null, 2));
-    
-    if (!data.success || !data.data) return "Unknown Event";
-
-    // Look for ctf_name or similar config
-    const ctfNameConfig = data.data.find((config: any) => config.key === "ctf_name" || config.key === "name");
-    return ctfNameConfig?.value || "Unknown Event";
-  } catch (error) {
-    console.error("Error fetching event name:", error);
-    return "Unknown Event";
-  }
+  }).catch((error) => {
+    console.error("Error loading event from db:", error);
+    eventNameCache.set(normalizedUrl, "Unknown Event");
+  });
 }
 async function fetchTeamRank(ctfdUrl: string, teamId: number, token: string): Promise<{ rank: string; totalTeams: number }> {
   try {
@@ -413,13 +412,13 @@ async function pollSolves(chatId: number, bot: TelegramBot): Promise<void> {
 
       // Only send notification if not already notified
       if (!session.notifiedSolves.has(solve.challenge_id)) {
-        // Fetch current rank and event name
+        // Fetch current rank and get event name from cache
         const { rank, totalTeams } = await fetchTeamRank(
           session.ctfdUrl,
           session.teamId,
           session.accessToken
         );
-        const eventName = await fetchEventName(session.ctfdUrl, session.accessToken);
+        const eventName = getEventName(session.ctfdUrl);
 
         // Calculate current total points (including this new solve)
         const currentPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
@@ -454,7 +453,7 @@ async function sendSummary(chatId: number, bot: TelegramBot): Promise<void> {
 
   const solves = await fetchTeamSolves(session.ctfdUrl, session.teamId, session.accessToken);
   const { rank, totalTeams } = await fetchTeamRank(session.ctfdUrl, session.teamId, session.accessToken);
-  const eventName = await fetchEventName(session.ctfdUrl, session.accessToken);
+  const eventName = getEventName(session.ctfdUrl);
 
   const totalPoints = solves.reduce((sum, solve) => sum + solve.challenge.value, 0);
 

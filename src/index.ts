@@ -3,7 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import { fetchCTFTimeEvents, type CTFTimeEvent } from "./ctftime.js";
 import { getScheduledEvents, isEventScheduled, markEventScheduled, markEventNotified, cleanupFinishedEvents } from "./db.js";
-import { startTracking, stopTracking, restoreCtfdSessions, findEasyChallenges } from "./ctfd.js";
+import { startTracking, stopTracking, restoreCtfdSessions, findEasyChallenges, setEventName } from "./ctfd.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import timezone from "dayjs/plugin/timezone.js";
@@ -192,6 +192,9 @@ bot.onText(/!ctfd\s+(.+)/, async (msg, match) => {
   }
 
   await bot.sendMessage(msg.chat.id, "Starting CTFd tracking\\.\\.\\.", { parse_mode: "MarkdownV2" });
+
+  // Try to find event name from events.json by matching CTFd URL
+  setEventName(ctfdUrl.trim());
 
   const result = await startTracking(msg.chat.id, ctfdUrl.trim(), teamName, accessToken.trim(), endTime, bot);
   
